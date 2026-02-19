@@ -12,8 +12,8 @@ func startServer(config Config) {
 	addr := fmt.Sprintf(":%d", config.Server.Port)
 
 	router := Router{config.Routes}
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	rl := &RateLimiter{clients: make(map[string]CounterTimestampPair)}
+	http.Handle("/", rl.rateLimiting(logger(requestId(timeout(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Received %s \n", r.Method)
 
 		routeFound, err := router.findRoute(r.URL.Path)
@@ -34,7 +34,7 @@ func startServer(config Config) {
 		proxy := httputil.NewSingleHostReverseProxy(targetLink)
 		proxy.ServeHTTP(w, r)
 		log.Printf("Forwarded %s request to target %s\n", r.Method, targetLink)
-	})
+	}))))))
 
 	log.Println("Server started listening on port", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
