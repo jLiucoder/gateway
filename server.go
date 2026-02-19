@@ -11,26 +11,29 @@ import (
 func startServer(config Config) {
 	addr := fmt.Sprintf(":%d", config.Server.Port)
 
+	router := Router{config.Routes}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Received %s \n", r.Method)
 
-		routes := config.Routes
+		routeFound, err := router.findRoute(r.URL.Path)
 
-		for _, route := range routes {
-			if route.Path == r.URL.Path {
-
-				targetLink, err := url.Parse(route.Target)
-
-				if err != nil {
-					fmt.Fprintln(w, "Error happend when parsing URL", err)
-					log.Println("Error happend when parsing URL", err)
-				}
-				proxy := httputil.NewSingleHostReverseProxy(targetLink)
-				proxy.ServeHTTP(w, r)
-				log.Printf("Forwarded %s request to target %s\n", r.Method, targetLink)
-			}
-
+		if err != nil {
+			log.Println("error finding route: ", err)
+			http.Error(w, "can not find route", http.StatusNotFound)
+			return
 		}
+
+		targetLink, err := url.Parse(routeFound.Target)
+
+		if err != nil {
+			fmt.Fprintln(w, "Error happend when parsing URL", err)
+			log.Println("Error happend when parsing URL", err)
+			return
+		}
+		proxy := httputil.NewSingleHostReverseProxy(targetLink)
+		proxy.ServeHTTP(w, r)
+		log.Printf("Forwarded %s request to target %s\n", r.Method, targetLink)
 	})
 
 	log.Println("Server started listening on port", addr)
