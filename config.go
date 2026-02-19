@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Server ServerConfig `yaml:"server"`
-	Routes  []RouteConfig  `yaml:"routes"`
+	Server  ServerConfig  `yaml:"server"`
+	Routes  []RouteConfig `yaml:"routes"`
+	ApiKeys []string
 }
 
 type ServerConfig struct {
@@ -19,21 +19,31 @@ type ServerConfig struct {
 
 type RouteConfig struct {
 	Path   string `yaml:"path"`
-	Target string `yaml:"target"`
+	Target []string `yaml:"target"`
+	lb *LoadBalancer
 }
 
-func loadConfig(path string) (Config, error) {
-	content, error := os.ReadFile(path)
+func loadConfig(path string, apiKeys []string) (Config, error) {
+	content, err := os.ReadFile(path)
 
-	if error != nil {
-		return Config{}, fmt.Errorf("can not read file: %w", error)
+	if err != nil {
+		return Config{}, fmt.Errorf("can not read file: %w", err)
 	}
 
 	var config Config
-	error = yaml.Unmarshal(content, &config)
+	err = yaml.Unmarshal(content, &config)
 
-	if error != nil {
-		return Config{}, fmt.Errorf("can not parse config: %w", error)
+	if err != nil {
+		return Config{}, fmt.Errorf("can not parse config: %w", err)
+	}
+	config.ApiKeys = apiKeys
+
+	for i := range config.Routes {
+		config.Routes[i].lb = &LoadBalancer{
+			strategy: &RoundRobin{
+				targets: config.Routes[i].Target,
+			},
+		}
 	}
 
 	log.Println("config file is loaded successfully")

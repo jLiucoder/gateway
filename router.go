@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 )
 
 type Router struct {
@@ -11,14 +10,11 @@ type Router struct {
 
 func (router Router) findRoute(path string) (RouteConfig, error) {
 
-	routes := router.Routes
-
-	for _, route := range routes {
+	for _, route := range router.Routes {
 		if route.Path == path {
-			log.Println("Found route based on path ", route.Path)
 			return route, nil
 		}
 
 	}
-	return RouteConfig{}, fmt.Errorf("route not found")
+	return RouteConfig{}, fmt.Errorf("route not found: %s", path)
 }

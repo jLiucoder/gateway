@@ -4,11 +4,22 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 )
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(status int) {
+	rw.status = status
+	rw.ResponseWriter.WriteHeader(status)
+}
 
 func logger(next http.Handler) http.Handler {
 
@@ -16,10 +27,15 @@ func logger(next http.Handler) http.Handler {
 		log.Printf("Handler Method : %s. Path : %s\n", r.Method, r.URL.Path)
 
 		currTime := time.Now()
-		next.ServeHTTP(w, r)
+		wrappedWr := &responseWriter{ResponseWriter: w, status: 200}
+
+		next.ServeHTTP(wrappedWr, r)
 		timeElapsed := time.Since(currTime)
 
 		log.Printf("request took %v to respond", timeElapsed)
+
+		requestCount.WithLabelValues(r.Method, r.URL.Path, fmt.Sprintf("%d", wrappedWr.status)).Inc()
+		requestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(timeElapsed.Seconds())
 	})
 }
 
@@ -54,16 +70,16 @@ func (rateLimiter *RateLimiter) rateLimiting(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rateLimiter.mu.Lock()
 		defer rateLimiter.mu.Unlock()
-		clientMap := rateLimiter.clients
+
 		clientIP := r.RemoteAddr
-		pair, exists := clientMap[clientIP]
+		pair, exists := rateLimiter.clients[clientIP]
 
 		if !exists || time.Since(pair.TimeStamp) > 60*time.Second {
-			pair = CounterTimestampPair{Counter: 0, TimeStamp: time.Now()}
+			pair = CounterTimestampPair{Counter: 1, TimeStamp: time.Now()}
 		} else {
 			pair.Counter++
 		}
-		clientMap[clientIP] = pair
+		rateLimiter.clients[clientIP] = pair
 
 		if pair.Counter > threshold {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
@@ -74,18 +90,34 @@ func (rateLimiter *RateLimiter) rateLimiting(next http.Handler) http.Handler {
 	})
 }
 
-func timeout(next http.Handler) http.Handler {
+func timeout(duration time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), duration)
+			defer cancel()
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
+			r = r.WithContext(ctx)
 
-		r = r.WithContext(ctx)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
-		next.ServeHTTP(w, r)
+func apiKeyAuth(apikeys []string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		if ctx.Err() == context.DeadlineExceeded {
-			http.Error(w, "upstream timeout", http.StatusGatewayTimeout)
-		}
-	})
+			authHeaderKey := r.Header.Get("Authorization")
+
+			for _, key := range apikeys {
+				if key == authHeaderKey {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			http.Error(w, "not authorized", http.StatusUnauthorized)
+
+		})
+	}
 }
