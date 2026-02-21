@@ -65,6 +65,22 @@ type RateLimiter struct {
 
 const threshold = 5
 
+func (rl *RateLimiter) startCleanup() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			rl.mu.Lock()
+			for ip, pair := range rl.clients {
+				if time.Since(pair.TimeStamp) > 60*time.Second {
+					delete(rl.clients, ip)
+				}
+			}
+			rl.mu.Unlock()
+		}
+	}()
+}
+
 func (rateLimiter *RateLimiter) rateLimiting(next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -20,7 +20,6 @@ type ServerConfig struct {
 type RouteConfig struct {
 	Path   string `yaml:"path"`
 	Target []string `yaml:"target"`
-	lb *LoadBalancer
 }
 
 func loadConfig(path string, apiKeys []string) (Config, error) {
@@ -37,14 +36,6 @@ func loadConfig(path string, apiKeys []string) (Config, error) {
 		return Config{}, fmt.Errorf("can not parse config: %w", err)
 	}
 	config.ApiKeys = apiKeys
-
-	for i := range config.Routes {
-		config.Routes[i].lb = &LoadBalancer{
-			strategy: &RoundRobin{
-				targets: config.Routes[i].Target,
-			},
-		}
-	}
 
 	log.Println("config file is loaded successfully")
 	return config, nil

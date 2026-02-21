@@ -3,13 +3,13 @@ server:
 
 routes:
   - path: /api/users
-    target: 
+    target:
       - http://localhost:3001
       - http://localhost:3002
-      - http://localhost:3003
+
   - path: /api/orders
-    target: 
+    target:
       - http://localhost:4002
   - path: /api/users/pages
-    target: 
+    target:
       - http://localhost:4003

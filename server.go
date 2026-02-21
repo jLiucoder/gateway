@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -16,10 +20,20 @@ const TIMEOUTDURATION = 5
 func startServer(config Config) {
 	addr := fmt.Sprintf(":%d", config.Server.Port)
 
-	router := Router{config.Routes}
+	routes := make([]Route, len(config.Routes))
+
+	for i, rc := range config.Routes {
+		routes[i] = Route{
+			Path: rc.Path,
+			lb:   &LoadBalancer{strategy: &RoundRobin{targets: rc.Target}},
+		}
+	}
+
+	router := Router{routes}
 
 	handler := proxyHandler(router)
 	rateLimiter := &RateLimiter{clients: make(map[string]CounterTimestampPair)}
+	rateLimiter.startCleanup()
 
 	//proxy forwarding
 	http.Handle("/", chain(handler,
@@ -39,8 +53,30 @@ func startServer(config Config) {
 	//metrics
 	http.Handle("/metrics", promhttp.Handler())
 
+	
+	srv := &http.Server{
+		Addr: addr,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
 	log.Println("Server started listening on port", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	
+	sigChan := make(chan os.Signal,1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("shutdown error:", err)
+	}
+	log.Println("server shut down cleanly")
+
 }
 
 func chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
@@ -52,7 +88,7 @@ func chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler)
 
 func proxyHandler(router Router) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		
+
 		log.Printf("Received %s \n", r.Method)
 		routeFound, err := router.findRoute(r.URL.Path)
 
