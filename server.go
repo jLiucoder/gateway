@@ -23,14 +23,19 @@ func startServer(config Config) {
 	routes := make([]Route, len(config.Routes))
 
 	for i, rc := range config.Routes {
+		targets := make([]*Target, len(rc.Target))
+		for j, target := range rc.Target {
+			targets[j] = &Target{URL: target, healthy: true}
+		}
+
 		routes[i] = Route{
 			Path: rc.Path,
-			lb:   &LoadBalancer{strategy: &RoundRobin{targets: rc.Target}},
+			lb:   &LoadBalancer{strategy: &RoundRobin{targets: targets}},
 		}
 	}
 
 	router := Router{routes}
-
+	StartHealthCheck(routes)
 	handler := proxyHandler(router)
 	rateLimiter := &RateLimiter{clients: make(map[string]CounterTimestampPair)}
 	rateLimiter.startCleanup()
@@ -53,7 +58,6 @@ func startServer(config Config) {
 	//metrics
 	http.Handle("/metrics", promhttp.Handler())
 
-	
 	srv := &http.Server{
 		Addr: addr,
 	}
@@ -64,8 +68,8 @@ func startServer(config Config) {
 		}
 	}()
 	log.Println("Server started listening on port", addr)
-	
-	sigChan := make(chan os.Signal,1)
+
+	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
@@ -98,7 +102,13 @@ func proxyHandler(router Router) http.Handler {
 			return
 		}
 		//return the targetLink from load balancer
-		targetLink, err := url.Parse(routeFound.lb.strategy.NextTarget())
+		tempLink, err := routeFound.lb.strategy.NextTarget()
+		if err != nil {
+			log.Println("error finding next target: ", err)
+			http.Error(w, "error finding next target", http.StatusBadGateway)
+			return
+		}
+		targetLink, err := url.Parse(tempLink)
 
 		if err != nil {
 			log.Println("error happened when parsing URL: ", err)

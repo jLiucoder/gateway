@@ -1,31 +1,95 @@
 package main
 
 import (
+	"fmt"
+	"log"
+	"net/http"
 	"sync"
+	"time"
 )
 
 type LoadBalancingStrategy interface {
-	NextTarget() string
+	NextTarget() (string, error)
+	CheckHealth()
 }
 
-type LoadBalancer struct{
+type LoadBalancer struct {
 	strategy LoadBalancingStrategy
 }
 
-//RoundRobin strategy section
-type RoundRobin struct{
-	targets []string
+// RoundRobin strategy section
+type RoundRobin struct {
+	targets []*Target
 	current int
-	mu sync.Mutex
+	mu      sync.Mutex
 }
 
-func (rr *RoundRobin) NextTarget() string {
+type Target struct {
+	URL     string
+	healthy bool
+	mu      sync.Mutex
+}
+
+func (t *Target) setHealthy(h bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.healthy = h
+}
+
+func (t *Target) isHealthy() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.healthy
+}
+
+func (rr *RoundRobin) NextTarget() (string, error) {
 	rr.mu.Lock()
 	defer rr.mu.Unlock()
-	target := rr.targets[rr.current]
 
-	//update current to be the next one
-	rr.current = (rr.current + 1) % len(rr.targets)
+	for i := 0; i < len(rr.targets); i++ {
 
-	return target
+		target := rr.targets[rr.current]
+		rr.current = (rr.current + 1) % len(rr.targets)
+		if target.isHealthy() {
+			return target.URL, nil
+		}
+	}
+	return "", fmt.Errorf("no healthy targets available")
+}
+
+func (rr *RoundRobin) CheckHealth() {
+
+	for _, target := range rr.targets {
+		resp, err := http.Get(target.URL)
+
+		if err != nil {
+			log.Printf("%s is not healthy\n", target.URL)
+			target.setHealthy(false)
+			continue
+		}
+		//we need to close the connection manually in go
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("%s is not healthy\n", target.URL)
+			target.setHealthy(false)
+		} else {
+			log.Printf("%s is healthy\n", target.URL)
+			target.setHealthy(true)
+		}
+	}
+}
+
+func StartHealthCheck(routes []Route) {
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			for _, route := range routes {
+				route.lb.strategy.CheckHealth()
+			}
+		}
+	}()
+
 }
