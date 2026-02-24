@@ -9,42 +9,40 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const TIMEOUTDURATION = 5
+const RLThreshold = 10
 
 func startServer(config Config) {
+
 	addr := fmt.Sprintf(":%d", config.Server.Port)
 
-	routes := make([]Route, len(config.Routes))
+	routes := buildRoutes(config)
 
-	for i, rc := range config.Routes {
-		targets := make([]*Target, len(rc.Target))
-		for j, target := range rc.Target {
-			targets[j] = &Target{URL: target, healthy: true}
-		}
+	router := NewRouter(routes)
 
-		routes[i] = Route{
-			Path: rc.Path,
-			lb:   &LoadBalancer{strategy: &RoundRobin{targets: targets}},
-		}
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	StartHealthCheck(ctx, routes)
 
-	router := Router{routes}
-	StartHealthCheck(routes)
+	watchConfig("config.yaml", &config, router, &cancel)
+
 	handler := proxyHandler(router)
-	rateLimiter := &RateLimiter{clients: make(map[string]CounterTimestampPair)}
-	rateLimiter.startCleanup()
+	//create new strategy of ratelimiter, we dont care which RL we really use, it all depends on the env var
+	rateLimiter := NewRateLimiter(RLThreshold)
 
 	//proxy forwarding
 	http.Handle("/", chain(handler,
 		logger,
 		apiKeyAuth(config.ApiKeys),
-		rateLimiter.rateLimiting,
+		rateLimiting(rateLimiter),
 		requestId,
 		timeout(TIMEOUTDURATION*time.Second),
 	))
@@ -73,14 +71,13 @@ func startServer(config Config) {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("shutdown error:", err)
 	}
 	log.Println("server shut down cleanly")
-
 }
 
 func chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
@@ -90,7 +87,7 @@ func chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler)
 	return handler
 }
 
-func proxyHandler(router Router) http.Handler {
+func proxyHandler(router *Router) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("Received %s \n", r.Method)
@@ -119,4 +116,57 @@ func proxyHandler(router Router) http.Handler {
 		proxy.ServeHTTP(w, r)
 		log.Printf("Forwarded %s request to target %s\n", r.Method, targetLink)
 	})
+}
+
+func buildRoutes(config Config) []Route {
+	routes := make([]Route, len(config.Routes))
+
+	for i, rc := range config.Routes {
+		targets := make([]*Target, len(rc.Target))
+		for j, target := range rc.Target {
+			targets[j] = &Target{URL: target, healthy: true}
+		}
+
+		routes[i] = Route{
+			Path: rc.Path,
+			lb:   &LoadBalancer{strategy: &RoundRobin{targets: targets}},
+		}
+	}
+	slices.SortFunc(routes, func(i, j Route) int {
+		return len(j.Path) - len(i.Path)
+	})
+	return routes
+}
+
+func watchConfig(path string, config *Config, router *Router, cancelHealthCheck *context.CancelFunc) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal("Failed to create watcher:", err)
+	}
+	if err := watcher.Add(path); err != nil {
+		log.Fatal("Failed to add path to watcher:", err)
+	}
+
+	go func() {
+		defer watcher.Close()
+		for event := range watcher.Events {
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				newConfig, err := loadConfig("config.yaml", config.ApiKeys)
+				if err != nil {
+					log.Println("error reloading config:", err)
+					continue
+				}
+				*config = newConfig
+
+				routes := buildRoutes(*config)
+				router.updateRoutes(routes)
+
+				(*cancelHealthCheck)()  // stop old goroutine
+                ctx, newCancel := context.WithCancel(context.Background())
+                *cancelHealthCheck = newCancel
+                StartHealthCheck(ctx, routes)
+			}
+		}
+	}()
+
 }

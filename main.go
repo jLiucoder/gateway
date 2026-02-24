@@ -14,7 +14,7 @@ func main() {
 	log.Println("----------Start of the main program----------")
 
 	config, err := loadConfig("config.yaml", keys)
-
+	
 	if err != nil {
 		log.Panic("Can't load config file, make sure the format is correct: ", err)
 	}

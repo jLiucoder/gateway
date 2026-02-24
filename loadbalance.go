@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -79,17 +80,22 @@ func (rr *RoundRobin) CheckHealth() {
 	}
 }
 
-func StartHealthCheck(routes []Route) {
+func StartHealthCheck(ctx context.Context, routes []Route) {
 
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			for _, route := range routes {
-				route.lb.strategy.CheckHealth()
-			}
-		}
+		for {
+            select {
+            case <-ticker.C:
+                for _, route := range routes {
+                    route.lb.strategy.CheckHealth()
+                }
+            case <-ctx.Done():
+                return
+            }
+        }
 	}()
 
 }
