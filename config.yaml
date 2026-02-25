@@ -4,12 +4,8 @@ server:
 routes:
   - path: /api/users
     target:
-      - http://localhost:3001
-      - http://localhost:3002
+      - https://jsonplaceholder.typicode.com/users
 
-  - path: /api/orders
+  - path: /api/posts
     target:
-      - http://localhost:4002
-  - path: /api/users/pages
-    target:
-      - http://localhost:4003
+      - https://jsonplaceholder.typicode.com/posts
