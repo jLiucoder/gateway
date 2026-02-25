@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -72,9 +73,9 @@ func apiKeyAuth(apikeys []string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 			authHeaderKey := r.Header.Get("Authorization")
-
-			for _, key := range apikeys {
-				if key == authHeaderKey {
+			hashAuthHeaderKey := hashKey(authHeaderKey)
+			for _, storedKey := range apikeys {
+				if subtle.ConstantTimeCompare([]byte(hashAuthHeaderKey), []byte(storedKey)) != 0 {
 					next.ServeHTTP(w, r)
 					return
 				}

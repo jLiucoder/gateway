@@ -18,7 +18,7 @@ import (
 )
 
 const TIMEOUTDURATION = 5
-const RLThreshold = 10
+const RLThreshold = 30
 
 func startServer(config Config) {
 
@@ -160,10 +160,10 @@ func watchConfig(path string, config *Config, router *Router, cancelHealthCheck 
 				routes := buildRoutes(*config)
 				router.updateRoutes(routes)
 
-				(*cancelHealthCheck)()  // stop old goroutine
-                ctx, newCancel := context.WithCancel(context.Background())
-                *cancelHealthCheck = newCancel
-                StartHealthCheck(ctx, routes)
+				(*cancelHealthCheck)() // stop old goroutine
+				ctx, newCancel := context.WithCancel(context.Background())
+				*cancelHealthCheck = newCancel
+				StartHealthCheck(ctx, routes)
 			}
 		}
 	}()
