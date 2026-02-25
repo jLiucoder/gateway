@@ -6,6 +6,6 @@ routes:
     target:
       - https://reqres.in/api/users
 
-  - path: /api/posts
+  - path: /api/random
     target:
-      - https://dummyjson.com/posts
+      - https://httpbin.org/stream/23
