@@ -4,8 +4,8 @@ server:
 routes:
   - path: /api/users
     target:
-      - https://jsonplaceholder.typicode.com/users
+      - https://reqres.in/api/users
 
   - path: /api/posts
     target:
-      - https://jsonplaceholder.typicode.com/posts
+      - https://dummyjson.com/posts
