@@ -9,3 +9,34 @@ routes:
   - path: /api/random
     target:
       - https://httpbin.org/stream/23
+
+llm:
+  classifier:
+    provider: kimi
+    model: moonshot-v1-8k
+
+  providers:
+    kimi:
+      type: openai-compat
+      base_url: https://api.moonshot.ai/v1
+      api_key_env: KIMI_API_KEY
+      models: [moonshot-v1-8k, kimi-k2.5]
+    anthropic:
+      type: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+      models: [claude-sonnet-4-6]
+    openai:
+      type: openai-compat
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      models: [gpt-4o-mini, gpt-4o]
+  tiers:
+    simple:
+      provider: openai
+      model: gpt-5-mini-2025-08-07
+    medium:
+      provider: kimi
+      model: kimi-k2.5
+    complex:
+      provider: anthropic
+      model: claude-opus-4-6

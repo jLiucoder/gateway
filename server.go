@@ -17,7 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-const TIMEOUTDURATION = 5
+const TIMEOUTDURATION = 50
 const RLThreshold = 30
 
 func startServer(config Config) {
@@ -39,6 +39,17 @@ func startServer(config Config) {
 
 	//proxy forwarding
 	http.Handle("/", chain(handler,
+		logger,
+		apiKeyAuth(config.ApiKeys),
+		rateLimiting(rateLimiter),
+		requestId,
+		timeout(TIMEOUTDURATION*time.Second),
+	))
+
+	//llm request handler
+	providers := buildProviders(config.LLMConfig)
+	classifierProvider := providers[config.LLMConfig.Classifier.Provider]
+	http.Handle("/smart/completion", chain(llmHandler(providers, config.LLMConfig.Classifier.Model, classifierProvider, config.LLMConfig.Tiers),
 		logger,
 		apiKeyAuth(config.ApiKeys),
 		rateLimiting(rateLimiter),
@@ -114,6 +125,12 @@ func proxyHandler(router *Router) http.Handler {
 		proxy := httputil.NewSingleHostReverseProxy(targetLink)
 		proxy.ServeHTTP(w, r)
 		log.Printf("Forwarded %s request to target %s\n", r.Method, targetLink)
+	})
+}
+
+func llmHandler(providers map[string]LLMProvider, classifierModel string, classifierProvider LLMProvider, tiers map[string]TierConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// TODO
 	})
 }
 

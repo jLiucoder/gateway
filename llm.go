@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+
+	"github.com/openai/openai-go/option"
 )
 
 // Request
@@ -162,4 +165,18 @@ type LLMProvider interface {
 	ChatStream(ctx context.Context, req LLMRequest) (<-chan StreamEvent, error)
 	Name() string
 	Models() []string
+}
+
+func buildProviders(llmConfig LLMConfig) map[string]LLMProvider {
+	res := map[string]LLMProvider{}
+
+	providerConfigs := llmConfig.Providers
+	for name, config := range providerConfigs {
+		if config.Type == "anthropic" {
+			res[name] = NewAnthropicProvider(os.Getenv(config.ApiKeyEnv), config.Models)
+		} else {
+			res[name] = NewOpenAICompatProvider(name, config.Models, option.WithAPIKey(os.Getenv(config.ApiKeyEnv)), option.WithBaseURL(config.BaseURL))
+		}
+	}
+	return res
 }
