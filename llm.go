@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/openai/openai-go/option"
 )
@@ -179,4 +181,21 @@ func buildProviders(llmConfig LLMConfig) map[string]LLMProvider {
 		}
 	}
 	return res
+}
+
+func classify(classifierModel string, classifierProvider LLMProvider, messages []Message, reqContext context.Context) (string, error) {
+
+	res, err := classifierProvider.Chat(reqContext, LLMRequest{
+		Model:    classifierModel,
+		System:   "Classify the user query into exactly one complexity tier. Reply with one word only.\n\nsimple: factual lookups, basic math, definitions, yes/no questions.\nmedium: multi-step reasoning, writing code, explaining concepts, comparisons.\ncomplex: deep research, architecture decisions, highly specialized technical analysis, long-form generation.",
+		Messages: messages,
+	})
+
+	if err != nil {
+		return "medium", fmt.Errorf("classifier call failed: %w", err)
+	}
+	if len(res.Content) == 0 || res.Content[0].Text == "" {
+		return "medium", fmt.Errorf("classifier returned empty response, medium is used")
+	}
+	return strings.TrimSpace(strings.ToLower(res.Content[0].Text)), nil
 }

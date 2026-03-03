@@ -12,8 +12,8 @@ routes:
 
 llm:
   classifier:
-    provider: kimi
-    model: moonshot-v1-8k
+    provider: openai
+    model: gpt-4.1-nano
 
   providers:
     kimi:
@@ -29,14 +29,14 @@ llm:
       type: openai-compat
       base_url: https://api.openai.com/v1
       api_key_env: OPENAI_API_KEY
-      models: [gpt-4o-mini, gpt-4o]
+      models: [gpt-4.1-nano, gpt-5-mini]
   tiers:
     simple:
       provider: openai
       model: gpt-5-mini-2025-08-07
     medium:
-      provider: kimi
-      model: kimi-k2.5
+      provider: openai
+      model: gpt-5
     complex:
-      provider: anthropic
-      model: claude-opus-4-6
+      provider: openai
+      model: gpt-5.2

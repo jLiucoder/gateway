@@ -68,11 +68,11 @@ func toOpenAIParams(req LLMRequest) openai.ChatCompletionNewParams {
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
 	}
-	// Prefer max_completion_tokens (o1/o3), fall back to max_tokens
+	// Always use max_completion_tokens; map max_tokens for client compatibility
 	if req.MaxCompletionTokens != nil {
 		params.MaxCompletionTokens = openai.Int(int64(*req.MaxCompletionTokens))
 	} else if req.MaxTokens != nil {
-		params.MaxTokens = openai.Int(int64(*req.MaxTokens))
+		params.MaxCompletionTokens = openai.Int(int64(*req.MaxTokens))
 	}
 	if req.TopP != nil {
 		params.TopP = openai.Float(*req.TopP)

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,7 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-const TIMEOUTDURATION = 50
+const TIMEOUTDURATION = 200
 const RLThreshold = 30
 
 func startServer(config Config) {
@@ -63,15 +65,31 @@ func startServer(config Config) {
 		fmt.Fprintln(w, "healthy")
 	}))
 
+	//test encoding handler for apikeys
+	http.Handle("/encode", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		var req struct {
+			Key string `json:"key"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+		}
+
+		hashed := hashKey(req.Key)
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, hashed)
+	}))
+
 	//metrics
 	http.Handle("/metrics", promhttp.Handler())
 
 	srv := &http.Server{
 		Addr: addr,
 	}
-
 	go func() {
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
 	}()
@@ -130,7 +148,40 @@ func proxyHandler(router *Router) http.Handler {
 
 func llmHandler(providers map[string]LLMProvider, classifierModel string, classifierProvider LLMProvider, tiers map[string]TierConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// TODO
+		var req LLMRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		tier, err := classify(classifierModel, classifierProvider, req.Messages, r.Context())
+
+		if err != nil {
+			log.Println(err)
+			w.Header().Set("X-Classification-Fallback", "medium")
+		}
+
+		chosenTierConfig, ok := tiers[tier]
+		if !ok {
+			log.Printf("unknown tier %q, falling back to medium", tier)
+			chosenTierConfig = tiers["medium"]
+		}
+		log.Printf("[routing] tier=%s provider=%s model=%s", tier, chosenTierConfig.Provider, chosenTierConfig.Model)
+		req.Model = chosenTierConfig.Model
+		resp, err := providers[chosenTierConfig.Provider].Chat(r.Context(), req)
+
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(resp)
+		if err != nil {
+			return
+		}
 	})
 }
 
