@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -51,7 +52,23 @@ func startServer(config Config) {
 	//llm request handler
 	providers := buildProviders(config.LLMConfig)
 	classifierProvider := providers[config.LLMConfig.Classifier.Provider]
-	http.Handle("/smart/completion", chain(llmHandler(providers, config.LLMConfig.Classifier.Model, classifierProvider, config.LLMConfig.Tiers),
+
+	//semantic cache
+	var cache *SemanticCache
+	redisAddr := os.Getenv("REDIS_REST_URL")
+	if redisAddr != "" {
+		redisDB, _ := strconv.Atoi(os.Getenv("REDIS_DB"))
+		cacheRdb := setupRedisClient(redisAddr, os.Getenv("REDIS_USERNAME"), os.Getenv("REDIS_PASSWORD"), redisDB)
+		c, err := NewSemanticCache(cacheRdb, defaultThreshold)
+		if err != nil {
+			log.Printf("[cache] failed to init semantic cache: %v (continuing without cache)", err)
+		} else {
+			cache = c
+			log.Println("[cache] semantic cache initialized")
+		}
+	}
+
+	http.Handle("/smart/completion", chain(llmHandler(providers, config.LLMConfig.Classifier.Model, classifierProvider, config.LLMConfig.Tiers, cache),
 		logger,
 		apiKeyAuth(config.ApiKeys),
 		rateLimiting(rateLimiter),
@@ -146,7 +163,7 @@ func proxyHandler(router *Router) http.Handler {
 	})
 }
 
-func llmHandler(providers map[string]LLMProvider, classifierModel string, classifierProvider LLMProvider, tiers map[string]TierConfig) http.Handler {
+func llmHandler(providers map[string]LLMProvider, classifierModel string, classifierProvider LLMProvider, tiers map[string]TierConfig, cache *SemanticCache) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req LLMRequest
 		err := json.NewDecoder(r.Body).Decode(&req)
@@ -154,6 +171,17 @@ func llmHandler(providers map[string]LLMProvider, classifierModel string, classi
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
+		}
+
+		// semantic cache lookup (non-streaming only)
+		queryText := extractQueryText(req.Messages)
+		if !req.Stream && cache != nil && queryText != "" {
+			if cached, hit := cache.Lookup(queryText); hit {
+				w.Header().Set("X-Cache", "HIT")
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(cached)
+				return
+			}
 		}
 
 		tier, err := classify(classifierModel, classifierProvider, req.Messages, r.Context())
@@ -169,18 +197,51 @@ func llmHandler(providers map[string]LLMProvider, classifierModel string, classi
 			chosenTierConfig = tiers["medium"]
 		}
 		log.Printf("[routing] tier=%s provider=%s model=%s", tier, chosenTierConfig.Provider, chosenTierConfig.Model)
+
 		req.Model = chosenTierConfig.Model
-		resp, err := providers[chosenTierConfig.Provider].Chat(r.Context(), req)
 
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
+		if req.Stream {
+			log.Printf("[streaming]: True")
 
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(resp)
-		if err != nil {
-			return
+			w.Header().Set("Content-Type", "text/event-stream")
+
+			resp, err := providers[chosenTierConfig.Provider].ChatStream(r.Context(), req)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			flusher := w.(http.Flusher)
+			for event := range resp {
+				marshalBytes, err := json.Marshal(event)
+				if err != nil {
+					return
+				}
+
+				fmt.Fprintf(w, "data: %s\n\n", marshalBytes)
+				flusher.Flush()
+			}
+		} else {
+
+			resp, err := providers[chosenTierConfig.Provider].Chat(r.Context(), req)
+
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			//add usage logging
+			log.Printf("[usage] input=%d output=%d total=%d", resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens)
+
+			// store in cache async
+			if cache != nil && queryText != "" {
+				go cache.Store(queryText, resp)
+			}
+
+			w.Header().Set("X-Cache", "MISS")
+			w.Header().Set("Content-Type", "application/json")
+			err = json.NewEncoder(w).Encode(resp)
+			if err != nil {
+				return
+			}
 		}
 	})
 }
