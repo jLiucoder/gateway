@@ -1,3 +1,6 @@
 .vscode/
+.idea/
 .env
 models/
+api-gateway
+.DS_Store
